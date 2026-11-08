@@ -176,6 +176,15 @@ h1{font-family:var(--font-display);font-weight:700;font-size:28px;letter-spacing
   h1{font-size:23px} .two{grid-template-columns:1fr} .tile .v{font-size:32px}
 }
 @media (prefers-reduced-motion:no-preference){.meter i{transition:width .3s}}
+[hidden]{display:none!important}
+.dlg.wide{width:min(680px,100%)}
+.dlg section{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.dlg h3{margin:0;font-family:var(--font-display);font-size:16px}
+.dlg ol{margin:4px 0 8px;padding-left:20px;font-size:13px;display:flex;flex-direction:column;gap:4px}
+.dlg details summary{cursor:pointer;font-weight:600;font-size:13px}
+.dlg pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:200px;font-size:11px;font-family:var(--font-mono);margin:6px 0}
+label.btn{display:inline-block}
+.stat{font-size:13px;font-weight:600}
 </style>
 </head>
 <body>
@@ -187,6 +196,7 @@ h1{font-family:var(--font-display);font-weight:700;font-size:28px;letter-spacing
     </div>
     <div class="actions">
       <span class="save" id="saveState" aria-live="polite"></span>
+      <button class="btn" id="shareBtn" type="button">Backup &amp; sharing</button>
       <button class="btn" id="copyCsv" type="button">Copy as CSV</button>
       <button class="btn primary" id="addBtn" type="button">+ Add comp</button>
     </div>
@@ -252,6 +262,56 @@ h1{font-family:var(--font-display);font-weight:700;font-size:28px;letter-spacing
       <button class="btn danger" type="button" id="delBtn">Delete</button>
     </div>
   </form>
+</div>
+
+<div class="scrim" id="scrim2" role="dialog" aria-modal="true" aria-labelledby="dlg2Title">
+  <div class="dlg wide">
+    <h2 id="dlg2Title">Backup and shared saving</h2>
+    <section>
+      <h3>Backup file</h3>
+      <div class="note">Save the whole plan to a file, or load one back in. Use this to move the plan between browsers or keep a copy.</div>
+      <div class="foot">
+        <button class="btn" type="button" id="bkDown">Download backup</button>
+        <button class="btn" type="button" id="bkCopy">Copy backup text</button>
+        <label class="btn" for="bkFile">Restore from file</label>
+        <input type="file" id="bkFile" accept=".json,application/json,text/plain" hidden>
+      </div>
+      <div class="impact" id="bkMsg" hidden></div>
+      <div class="foot" id="bkActions" hidden>
+        <button class="btn primary" type="button" id="bkReplace">Replace my plan with the file</button>
+        <button class="btn" type="button" id="bkAdd">Add the file's comps to my plan</button>
+        <button class="btn" type="button" id="bkCancel">Cancel</button>
+      </div>
+    </section>
+    <section>
+      <h3>Shared saving with Google Drive</h3>
+      <div class="stat" id="syStat"></div>
+      <div class="note">Everyone who connects to the same address sees the same plan, and edits merge. It stores one small file in your Google Drive.</div>
+      <label class="f" for="syUrl">Web app address<input id="syUrl" placeholder="https://script.google.com/macros/s/.../exec"></label>
+      <label class="f" for="syKey">Password (only if you set one in the script)<input id="syKey" autocomplete="off"></label>
+      <div class="foot">
+        <button class="btn primary" type="button" id="syUse">Connect and load the shared plan</button>
+        <button class="btn" type="button" id="syUp">Connect and upload this plan</button>
+        <button class="btn danger" type="button" id="syOff">Disconnect</button>
+      </div>
+      <div class="impact" id="syMsg" hidden></div>
+      <details>
+        <summary>How to set it up (about 5 minutes, once)</summary>
+        <ol>
+          <li>Go to script.google.com and click <b>New project</b>.</li>
+          <li>Delete the sample code, paste the script below, and click the save icon.</li>
+          <li>Click <b>Deploy</b>, then <b>New deployment</b>. Click the gear and choose <b>Web app</b>.</li>
+          <li>Set <b>Execute as</b> to <b>Me</b> and <b>Who has access</b> to <b>Anyone</b>. Click <b>Deploy</b>.</li>
+          <li>Click <b>Authorize access</b> and choose your Google account. If Google warns the app is not verified, click <b>Advanced</b>, then <b>Go to project</b>, then <b>Allow</b>.</li>
+          <li>Copy the <b>Web app URL</b> (it ends in /exec), paste it in the box above, and click a Connect button.</li>
+          <li>Send the same URL to your team. Each person pastes it once on their own computer.</li>
+        </ol>
+        <button class="btn sm" type="button" id="gsCopy">Copy the script</button>
+        <pre id="gsText"></pre>
+      </details>
+    </section>
+    <div class="foot"><span class="spacer"></span><button class="btn primary" type="button" id="dlg2Close">Done</button></div>
+  </div>
 </div>
 
 <script>
@@ -484,11 +544,12 @@ function setSave(t){ $('saveState').textContent=t; }
 function changed(){
   touched=true; usingSeed=false; render();
   clearTimeout(saveTimer); setSave('Saving...');
-  saveTimer=setTimeout(persist,500);
+  saveTimer=setTimeout(()=>{ saveTimer=null; persist(); },500);
 }
 async function persist(){
   const payload={comps:S.comps,cap:S.cap,tent:S.tent,showDrop:S.showDrop};
   try{ localStorage.setItem('comp-planner-blank-v1',JSON.stringify(payload)); }catch(e){}
+  if(sync.url){ await syncPush(); return; }
   if(dbDoc){
     try{ await dbDoc.set(payload); setSave('Saved'); }
     catch(e){
@@ -520,6 +581,147 @@ function applyLoaded(p){
   }catch(e){}
 })();
 
+/* ---------- backup + shared saving ---------- */
+const SYNC_URL = '';  // optional: paste a web app address here to connect everyone who opens this file
+const SYNC_KEY = '';
+const APPS_SCRIPT = "// Comp Planner shared saving. Paste this whole file into a new Google Apps Script project.\n// Optional: set a password below, then type the same password into the planner.\nconst SHARED_KEY = '';\nconst FILE_NAME = 'comp-planner-data.json';\n\nfunction file_() {\n  const props = PropertiesService.getScriptProperties();\n  const id = props.getProperty('fid');\n  if (id) {\n    try { return DriveApp.getFileById(id); } catch (err) {}\n  }\n  const f = DriveApp.createFile(FILE_NAME, JSON.stringify({ rev: 0, data: null }), MimeType.PLAIN_TEXT);\n  props.setProperty('fid', f.getId());\n  return f;\n}\n\nfunction reply_(obj) {\n  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doGet(e) {\n  if (SHARED_KEY && (e.parameter.key || '') !== SHARED_KEY) return reply_({ ok: false, error: 'Wrong password' });\n  const s = JSON.parse(file_().getBlob().getDataAsString());\n  return reply_({ ok: true, rev: s.rev, data: s.data });\n}\n\nfunction doPost(e) {\n  const lock = LockService.getScriptLock();\n  lock.waitLock(20000);\n  try {\n    const body = JSON.parse(e.postData.contents);\n    if (SHARED_KEY && body.key !== SHARED_KEY) return reply_({ ok: false, error: 'Wrong password' });\n    const f = file_();\n    const s = JSON.parse(f.getBlob().getDataAsString());\n    if (body.baseRev !== s.rev) return reply_({ ok: false, conflict: true, rev: s.rev, data: s.data });\n    const next = { rev: s.rev + 1, data: body.data };\n    f.setContent(JSON.stringify(next));\n    return reply_({ ok: true, rev: next.rev });\n  } finally {\n    lock.releaseLock();\n  }\n}\n";
+let sync = {url:'',key:'',rev:null,snap:null,snapSet:null,busy:false};
+const timeStr = () => new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+const planData = () => ({comps:S.comps,cap:S.cap,tent:S.tent,showDrop:S.showDrop});
+const snapOf = list => { const m={}; list.forEach(c=>{ m[c.id]=JSON.stringify(c); }); return m; };
+const setStr = () => JSON.stringify([S.cap,S.tent]);
+function loadSyncCfg(){
+  let c={}; try{ c=JSON.parse(localStorage.getItem('comp-planner-sync')||'{}'); }catch(e){}
+  sync.url=(SYNC_URL||c.url||'').trim(); sync.key=SYNC_KEY||c.key||'';
+}
+function saveSyncCfg(url,key){ sync.url=url; sync.key=key; try{ if(url) localStorage.setItem('comp-planner-sync',JSON.stringify({url,key})); else localStorage.removeItem('comp-planner-sync'); }catch(e){} }
+async function sget(){
+  const r = await fetch(sync.url+(sync.url.includes('?')?'&':'?')+'key='+encodeURIComponent(sync.key),{cache:'no-store'});
+  return r.json();
+}
+async function spost(data){
+  const r = await fetch(sync.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:sync.key,baseRev:sync.rev,data})});
+  return r.json();
+}
+function cleanComps(list){ return list.map(c=>({...c,format:normFormat(c.format)})); }
+function applyServer(d){
+  S.comps=cleanComps(d.comps); if(typeof d.cap==='number') S.cap=d.cap; if(typeof d.tent==='boolean') S.tent=d.tent;
+  usingSeed=false; $('cap').value=S.cap; $('tent').checked=S.tent;
+}
+function markSynced(rev){ sync.rev=rev; sync.snap=snapOf(S.comps); sync.snapSet=setStr(); }
+function hasLocalChanges(){
+  if(!sync.snap) return touched;
+  const now=snapOf(S.comps), a=Object.keys(now), b=Object.keys(sync.snap);
+  if(a.length!==b.length) return true;
+  for(const id of a) if(now[id]!==sync.snap[id]) return true;
+  return sync.snapSet!==setStr();
+}
+function mergeInto(server){
+  const base=sync.snap||{}, sm=new Map(cleanComps(server.comps||[]).map(c=>[c.id,c])), lm=new Map(S.comps.map(c=>[c.id,c]));
+  for(const c of S.comps){ if(base[c.id]!==JSON.stringify(c)) sm.set(c.id,c); }
+  for(const id of Object.keys(base)){ if(!lm.has(id)) sm.delete(id); }
+  const keepSettings = sync.snapSet!==null && sync.snapSet!==setStr();
+  S.comps=Array.from(sm.values());
+  if(!keepSettings){ if(typeof server.cap==='number') S.cap=server.cap; if(typeof server.tent==='boolean') S.tent=server.tent; $('cap').value=S.cap; $('tent').checked=S.tent; }
+  sync.snap=snapOf(cleanComps(server.comps||[])); sync.snapSet=JSON.stringify([server.cap,server.tent]);
+}
+async function syncPull(){
+  if(!sync.url||sync.busy) return; sync.busy=true;
+  try{
+    const r=await sget(); if(!r||!r.ok) throw new Error((r&&r.error)||'bad reply');
+    if(r.data && Array.isArray(r.data.comps)){
+      if(!hasLocalChanges()){ const before=JSON.stringify(S.comps); applyServer(r.data); markSynced(r.rev); if(before!==JSON.stringify(S.comps)) render(); }
+      else { mergeInto(r.data); sync.rev=r.rev; render(); clearTimeout(saveTimer); saveTimer=setTimeout(()=>{ saveTimer=null; persist(); },300); }
+    } else { sync.rev=r.rev; if(!usingSeed && S.comps.length){ clearTimeout(saveTimer); saveTimer=setTimeout(()=>{ saveTimer=null; persist(); },300); } }
+    setSave('Shared plan, checked '+timeStr());
+  }catch(e){ setSave('Shared plan unreachable: '+String(e&&e.message||e).slice(0,70)); }
+  finally{ sync.busy=false; }
+}
+async function syncPush(){
+  if(!sync.url) return;
+  if(sync.busy){ clearTimeout(saveTimer); saveTimer=setTimeout(()=>{ saveTimer=null; persist(); },800); return; }
+  sync.busy=true; setSave('Saving to shared plan...');
+  try{
+    if(sync.rev===null){ const g=await sget(); if(!g||!g.ok) throw new Error((g&&g.error)||'bad reply'); sync.rev=g.rev; if(g.data&&Array.isArray(g.data.comps)){ mergeInto(g.data); render(); } }
+    let r=await spost(planData());
+    if(r&&r.conflict){
+      mergeInto(r.data); sync.rev=r.rev; render();
+      r=await spost(planData());
+      if(r&&r.conflict) throw new Error('plan changed again, edit once more');
+      toast('Someone else changed the plan. Their changes were merged with yours.');
+    }
+    if(!r||!r.ok) throw new Error((r&&r.error)||'rejected');
+    markSynced(r.rev); setSave('Shared plan saved '+timeStr());
+  }catch(e){ setSave('NOT SAVED to shared plan: '+String(e&&e.message||e).slice(0,80)); }
+  finally{ sync.busy=false; }
+}
+function syStatus(){
+  $('syStat').textContent = sync.url ? 'Connected to a shared plan.' : 'Not connected. Saving in this browser only.';
+  $('syUrl').value=sync.url; $('syKey').value=sync.key;
+}
+function syMsg(m){ const b=$('syMsg'); b.hidden=!m; b.textContent=m||''; }
+async function syConnect(mode){
+  const url=$('syUrl').value.trim(), key=$('syKey').value;
+  if(!/^https:\/\//.test(url)){ syMsg('Paste the web app address. It starts with https:// and ends in /exec.'); return; }
+  const old={url:sync.url,key:sync.key}; saveSyncCfg(url,key); sync.busy=false; syMsg('Connecting...');
+  try{
+    const g=await sget();
+    if(!g||!g.ok){ saveSyncCfg(old.url,old.key); syMsg(g&&g.error==='Wrong password' ? 'The password is wrong.' : 'The script answered with an error. Check the setup steps.'); return; }
+    sync.rev=g.rev;
+    if(mode==='use'){
+      if(g.data&&Array.isArray(g.data.comps)){ applyServer(g.data); markSynced(g.rev); render(); syMsg('Connected. Loaded '+S.comps.length+' comps from the shared plan.'); }
+      else { sync.snap=null; syMsg('Connected. The shared plan is empty. Click "Connect and upload this plan" to fill it.'); }
+      setSave('Shared plan, checked '+timeStr());
+    } else {
+      const r=await spost(planData());
+      if(!r||!r.ok) throw new Error((r&&r.error)||'rejected');
+      markSynced(r.rev); syMsg('Connected. Uploaded '+S.comps.length+' comps. Everyone else who connects will see them.'); setSave('Shared plan saved '+timeStr());
+    }
+    touched=true; usingSeed=false; syStatus();
+  }catch(e){
+    saveSyncCfg(old.url,old.key);
+    syMsg('Could not reach that address. Check you deployed it as a web app with access set to Anyone, then copy the URL again. If this page is open inside claude.ai, connecting is blocked there; use the GitHub copy.');
+  }
+}
+/* backup */
+function backupText(){ return JSON.stringify(Object.assign({app:'comp-planner',version:1,exportedAt:new Date().toISOString()},planData()),null,1); }
+function bkMsg(m){ const b=$('bkMsg'); b.hidden=!m; b.textContent=m||''; }
+let pending=null;
+function parseBackup(txt){
+  const o=JSON.parse(txt), list=Array.isArray(o)?o:o.comps;
+  if(!Array.isArray(list)) throw new Error('no comps found');
+  const re=/^\d{4}-\d\d-\d\d$/;
+  const comps=list.map(c=>({id:String(c.id||uid()),name:String(c.name||'').slice(0,120),theme:THEMES.some(t=>t.id===c.theme)?c.theme:'ot',format:normFormat(c.format),
+    launch:re.test(c.launch)?c.launch:'',end:re.test(c.end)?c.end:'',status:['Confirmed','Tentative','Dropped'].includes(c.status)?c.status:'Confirmed',note:String(c.note||'').slice(0,300)}))
+    .filter(c=>c.name&&c.launch&&c.end&&c.end>=c.launch);
+  return {comps,cap:o.cap,tent:o.tent,skipped:list.length-comps.length};
+}
+/* wiring */
+function openShare(){ syStatus(); syMsg(''); bkMsg(''); $('bkActions').hidden=true; pending=null; $('gsText').textContent=APPS_SCRIPT; $('scrim2').classList.add('on'); }
+$('shareBtn').onclick=openShare;
+$('dlg2Close').onclick=()=>$('scrim2').classList.remove('on');
+$('scrim2').addEventListener('mousedown',e=>{ if(e.target===$('scrim2')) $('scrim2').classList.remove('on'); });
+$('syUse').onclick=()=>syConnect('use');
+$('syUp').onclick=()=>syConnect('up');
+$('syOff').onclick=()=>{ saveSyncCfg('',''); sync.rev=null; sync.snap=null; syStatus(); syMsg('Disconnected. This browser keeps its own copy of the plan.'); setSave('Saved in this browser only'); };
+$('gsCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(APPS_SCRIPT); $('gsCopy').textContent='Copied'; }catch(e){ $('gsCopy').textContent='Copy blocked: select the text below'; } setTimeout(()=>{ $('gsCopy').textContent='Copy the script'; },2200); };
+$('bkDown').onclick=()=>{
+  try{ const b=new Blob([backupText()],{type:'application/json'}), a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='comp-planner-backup-'+n2iso(TODAY)+'.json'; document.body.appendChild(a); a.click(); a.remove(); bkMsg('Backup requested. If no file appeared, use "Copy backup text" and paste it into a .json file.'); }
+  catch(e){ bkMsg('Your browser blocked the download. Use "Copy backup text" instead.'); }
+};
+$('bkCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(backupText()); bkMsg('Backup text copied. Paste it into a file named something like backup.json.'); }catch(e){ bkMsg('Copy was blocked by this browser.'); } };
+$('bkFile').onchange=async e=>{
+  const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  try{
+    pending=parseBackup(await f.text());
+    bkMsg('This file has '+pending.comps.length+' usable comps'+(pending.skipped?' ('+pending.skipped+' skipped: missing name or dates)':'')+'. Your plan currently has '+S.comps.length+'.');
+    $('bkActions').hidden=false;
+  }catch(err){ pending=null; $('bkActions').hidden=true; bkMsg('That file is not a planner backup ('+String(err.message||err)+').'); }
+};
+$('bkReplace').onclick=()=>{ if(!pending) return; S.comps=pending.comps; if(typeof pending.cap==='number'){ S.cap=pending.cap; $('cap').value=S.cap; } if(typeof pending.tent==='boolean'){ S.tent=pending.tent; $('tent').checked=S.tent; } bkMsg('Plan replaced with '+S.comps.length+' comps from the file.'); $('bkActions').hidden=true; pending=null; changed(); };
+$('bkAdd').onclick=()=>{ if(!pending) return; const ids=new Set(S.comps.map(c=>c.id)); let n=0; for(const c of pending.comps){ if(ids.has(c.id)) c.id=uid()+n; ids.add(c.id); S.comps.push(c); n++; } bkMsg('Added '+n+' comps. Your plan now has '+S.comps.length+'.'); $('bkActions').hidden=true; pending=null; changed(); };
+$('bkCancel').onclick=()=>{ pending=null; $('bkActions').hidden=true; bkMsg(''); };
+
 /* ---------- events ---------- */
 document.addEventListener('click', e=>{
   const ed=e.target.closest('[data-edit]'); if(ed){ const c=S.comps.find(x=>x.id===ed.dataset.edit); if(c) openDlg(c); return; }
@@ -534,7 +736,7 @@ document.addEventListener('click', e=>{
 $('addBtn').onclick=()=>openDlg(null);
 $('cancelBtn').onclick=closeDlg;
 $('scrim').addEventListener('mousedown',e=>{ if(e.target===$('scrim')) closeDlg(); });
-document.addEventListener('keydown',e=>{ if(e.key==='Escape' && $('scrim').classList.contains('on')) closeDlg(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ if($('scrim').classList.contains('on')) closeDlg(); if($('scrim2').classList.contains('on')) $('scrim2').classList.remove('on'); } });
 ['fLaunch','fEnd','fStatus','fTheme'].forEach(id=>$(id).addEventListener('input',updateImpact));
 $('fLaunch').addEventListener('change',()=>{ if($('fLaunch').value && (!$('fEnd').value || $('fEnd').value<$('fLaunch').value)) $('fEnd').value=$('fLaunch').value; updateImpact(); });
 $('form').addEventListener('submit',e=>{
@@ -583,6 +785,13 @@ window.addEventListener('resize',()=>{ if(view==='timeline') render(); });
 
 $('cap').value=S.cap; $('tent').checked=S.tent; $('drop').checked=S.showDrop;
 render();
+loadSyncCfg();
+if(sync.url){
+  setSave('Connecting to shared plan...');
+  syncPull();
+  setInterval(()=>{ if(!sync.url||document.hidden||sync.busy||saveTimer||$('scrim').classList.contains('on')||$('scrim2').classList.contains('on')) return; syncPull(); },30000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden && !saveTimer) syncPull(); });
+}
 </script>
 </body>
 </html>

@@ -287,6 +287,7 @@ label.btn{display:inline-block}
       <h3>Shared saving with Google Drive</h3>
       <div class="stat" id="syStat"></div>
       <div class="note">Everyone who connects to the same address sees the same plan, and edits merge. It stores one small file in your Google Drive.</div>
+      <div id="syForm" style="display:flex;flex-direction:column;gap:8px">
       <label class="f" for="syUrl">Web app address<input id="syUrl" placeholder="https://script.google.com/macros/s/.../exec"></label>
       <label class="f" for="syKey">Password (only if you set one in the script)<input id="syKey" autocomplete="off"></label>
       <div class="foot">
@@ -309,12 +310,21 @@ label.btn{display:inline-block}
         <button class="btn sm" type="button" id="gsCopy">Copy the script</button>
         <pre id="gsText"></pre>
       </details>
+      </div>
     </section>
     <div class="foot"><span class="spacer"></span><button class="btn primary" type="button" id="dlg2Close">Done</button></div>
   </div>
 </div>
 
 <script>
+window.__plannerBooted=false;
+function __showErr(m){ var d=document.getElementById('bootErr'); if(!d){ d=document.createElement('div'); d.id='bootErr'; d.style.cssText='position:fixed;left:12px;right:12px;bottom:12px;z-index:99;background:#c62f2f;color:#fff;padding:10px 14px;border-radius:8px;font:14px/1.4 sans-serif;white-space:pre-wrap'; document.body.appendChild(d); } d.textContent='Planner error: '+m; }
+window.addEventListener('error',function(e){ __showErr((e.message||'unknown error')+(e.lineno?' (line '+e.lineno+')':'')); });
+window.addEventListener('unhandledrejection',function(e){ __showErr(String((e.reason&&e.reason.message)||e.reason)); });
+setTimeout(function(){ if(!window.__plannerBooted) __showErr('The page code did not finish loading. Paste the whole Index.html file again, then deploy a new version.'); },3000);
+</script>
+<script>
+(function(){
 const SEED = [];
 const THEMES = [
   {id:'mm',name:'Money Monday'},{id:'tt',name:'Travel Tuesday'},{id:'ww',name:'Whopper Wednesday'},
@@ -593,13 +603,18 @@ const setStr = () => JSON.stringify([S.cap,S.tent]);
 function loadSyncCfg(){
   let c={}; try{ c=JSON.parse(localStorage.getItem('comp-planner-sync')||'{}'); }catch(e){}
   sync.url=(SYNC_URL||c.url||'').trim(); sync.key=SYNC_KEY||c.key||'';
+  if(IN_GAS){ sync.url='gas'; sync.key=''; }
 }
 function saveSyncCfg(url,key){ sync.url=url; sync.key=key; try{ if(url) localStorage.setItem('comp-planner-sync',JSON.stringify({url,key})); else localStorage.removeItem('comp-planner-sync'); }catch(e){} }
+const IN_GAS = typeof google !== 'undefined' && !!(google.script && google.script.run);
+function gas(fn, arg){ return new Promise((res,rej)=>{ const r=google.script.run.withSuccessHandler(res).withFailureHandler(e=>rej(new Error((e&&e.message)||String(e)))); arg===undefined ? r[fn]() : r[fn](arg); }); }
 async function sget(){
+  if(IN_GAS) return gas('getPlan');
   const r = await fetch(sync.url+(sync.url.includes('?')?'&':'?')+'key='+encodeURIComponent(sync.key),{cache:'no-store'});
   return r.json();
 }
 async function spost(data){
+  if(IN_GAS) return gas('savePlan', JSON.stringify({baseRev:sync.rev,data}));
   const r = await fetch(sync.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:sync.key,baseRev:sync.rev,data})});
   return r.json();
 }
@@ -656,7 +671,8 @@ async function syncPush(){
   finally{ sync.busy=false; }
 }
 function syStatus(){
-  $('syStat').textContent = sync.url ? 'Connected to a shared plan.' : 'Not connected. Saving in this browser only.';
+  $('syStat').textContent = IN_GAS ? 'Shared saving is on. Everyone who opens this page sees the same plan.' : (sync.url ? 'Connected to a shared plan.' : 'Not connected. Saving in this browser only.');
+  $('syForm').hidden = IN_GAS;
   $('syUrl').value=sync.url; $('syKey').value=sync.key;
 }
 function syMsg(m){ const b=$('syMsg'); b.hidden=!m; b.textContent=m||''; }
@@ -792,6 +808,8 @@ if(sync.url){
   setInterval(()=>{ if(!sync.url||document.hidden||sync.busy||saveTimer||$('scrim').classList.contains('on')||$('scrim2').classList.contains('on')) return; syncPull(); },30000);
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden && !saveTimer) syncPull(); });
 }
+window.__plannerBooted=true;
+})();
 </script>
 </body>
 </html>
